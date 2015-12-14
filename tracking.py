@@ -3,15 +3,16 @@ import cv2
 import time
 import thread
 import math
-from collections import namedtuple
 from tracked_object import TrackedObject
+from collections import namedtuple
 from bg_subtractor import filter_frame
-from comunication import send_transaction
-from comunication import play_in_sound, play_out_sound
+from comunication import send_transaction, get_tag_permission
+from antena_read import AntennaReader
 
 ###############SETTINGS##############################
-URL = '/home/andrej/Music/video.avi'
+URL = '/Users/andrejchudy/Desktop/video.avi'
 GUI = False
+PERM_RECORD = False   #permissions to record
 MIN_CONTOUR_AREA = 4400
 HEIGHT_TOLERANCE = 10
 MAX_DISTANCE_TO_PARSE =  200
@@ -20,6 +21,7 @@ MAX_DISTANCE_TO_MERGE = 10
 FRAME_WIDTH = 640
 FRAME_HEIGHT = 480
 RECORD = False
+dir_reversed = False    #revers monitoring
 ######################################################
 
 pass_in = 0
@@ -186,7 +188,7 @@ def update_missing(unused_objects, tracked_objects):
         if unused_object.missing() == -1:
             tracked_objects.remove(unused_object)
 
-def counter_person_flow(tracked_objects, t):
+def counter_person_flow(tracked_objects,antenna_reader ,t):
     global pass_in
     global pass_out
     for tracked_object in tracked_objects:
@@ -200,8 +202,12 @@ def counter_person_flow(tracked_objects, t):
             if i != 0 or o != 0:   #object-counting 
                 tracked_object.start_y = FRAME_HEIGHT
                 tracked_object.changed_starting_pos = True
-                thread.start_new_thread(send_transaction,(1525458,'in'))
-                thread.start_new_thread(play_in_sound,())
+                tag, certainity = antenna_reader.get_object_tag_id(tracked_object.center_time)
+                alarm = get_tag_permission(tag)
+                if dir_reversed:
+                    thread.start_new_thread(send_transaction,(tag,'in',tracked_object.center_time, certainity, alarm))
+                else:
+                    thread.start_new_thread(send_transaction,(tag,'out',tracked_object.center_time,certainity, alarm))
             
         if (tracked_object.start_y > FRAME_HEIGHT / 2 and
                 tracked_object.get_prediction(t).y < FRAME_HEIGHT / 4 ):    #down line
@@ -211,13 +217,20 @@ def counter_person_flow(tracked_objects, t):
             if i != 0 or o != 0:   #object-counting
                 tracked_object.start_y = 0
                 tracked_object.changed_starting_pos = True
-                thread.start_new_thread(send_transaction,(1525458,'out'))
-                thread.start_new_thread(play_out_sound,())
+                tag, certainity = antenna_reader.get_object_tag_id(tracked_object.center_time)
+                alarm = get_tag_permission(tag)
+                if dir_reversed:
+                    thread.start_new_thread(send_transaction,(tag,'out',tracked_object.center_time,certainity, alarm))
+                else: 
+                    thread.start_new_thread(send_transaction,(tag,'in',tracked_object.center_time,certainity, alarm))
 
 def parse_arguments(arguments):
-    if "-gui" in arguments:
+    if "-g" in arguments:
         global GUI
         GUI = True
+    if "-r" in arguments:
+        global PERM_RECORD
+        PERM_RECORD = True
 
 def tracking_start(arguments):
     parse_arguments(arguments)
@@ -229,13 +242,15 @@ def tracking_start(arguments):
 
     # Iterate forever
     tracked_objects = []
-    t = 10
-    fourcc = cv2.VideoWriter_fourcc(*'XVID')
-    record_cap = cv2.VideoWriter('output.avi',fourcc, 20.0, (FRAME_WIDTH,FRAME_HEIGHT))
+    if PERM_RECORD:
+        fourcc = cv2.VideoWriter_fourcc(*'XVID')
+        record_cap = cv2.VideoWriter('output.avi',fourcc, 20.0, (FRAME_WIDTH,FRAME_HEIGHT))
+    antena_reader = AntennaReader()
+
     while(cap.isOpened()):
-        t +=1 
+        t = time.time() 
         global RECORD
-        RECORD = False;
+        RECORD = False
         #Read frame
         ret, frame = cap.read()
         if not ret:
@@ -245,7 +260,7 @@ def tracking_start(arguments):
         filtered_fg = filter_frame(frame, bg_reference)
         # Find centroids of all contours
         centroids = find_contours(frame, filtered_fg)
-        pairs, unused_centroids ,unused_objects= assign_centroids(
+        pairs, unused_centroids, unused_objects = assign_centroids(
                 tracked_objects, centroids, t)
         # Create objects for centroid that were not assigned
         create_objects(unused_centroids, tracked_objects, t)
@@ -254,8 +269,8 @@ def tracking_start(arguments):
         # Delete missing objects and call callbacks
         update_missing(unused_objects, tracked_objects)
         # Control position all objects
-        counter_person_flow(tracked_objects, t)
-        if GUI:
+        counter_person_flow(tracked_objects, antena_reader, t)
+        if GUI or PERM_RECORD: 
             cv2.namedWindow('frame', 0)             #init windows
             cv2.namedWindow('filtered_fgmask', 0) 
             # Show counters
@@ -269,20 +284,24 @@ def tracking_start(arguments):
                 frame = cv2.rectangle(frame, (x,y), (x+w,y+h), obj.color,5)
                 frame = cv2.circle(frame, obj.get_prediction(t), 10, obj.color, -1)
                 frame = cv2.circle(frame, obj.get_prediction(t), MAX_DISTANCE_TO_PARSE, obj.color, 0)          
-
             font = cv2.FONT_HERSHEY_SIMPLEX
-            cv2.putText(frame,str(pass_in),(10,50), font, 1,(0,0,255),2)
-            cv2.putText(frame,str(pass_out),(10,400), font, 1,(0,0,255),2)
-            
-            if RECORD == True:
+            frame = cv2.putText(frame,str(pass_in),(10,50), font, 1,(0,0,255),2)
+            frame = cv2.putText(frame,str(pass_out),(10,400), font, 1,(0,0,255),2)
+        if PERM_RECORD:
+            if record == True:
                 record_cap.write(frame)
-            
+       
+        if GUI:   
             cv2.imshow('frame',frame)
             cv2.imshow('filtered_fgmask',filtered_fg)
-            key = cv2.waitKey(1)
 
+            key = cv2.waitKey(1)
             if key & 0xFF == ord('q'):
                 break
+            if key & 0xFF == ord('s'):
+                frame_delay = 500
+            if key & 0xFF == ord('f'):
+                frame_delay = 1
 
     # Teardown
     cap.release()

@@ -18,18 +18,31 @@ class TrackedObject():
         self.start_y = y
         self.changed_starting_pos = False
         self.id = int(255*random.random())
+        self.center_time = 0
 
         self.color = (255*random.random(), 255*random.random(),
                 255*random.random())
 
     def update (self, x, y, time):
 
+        half_frame_height = frame_height / 2
+        if (len(self.history) != 0) :
+            last_y = self.history[-1][1] 
+            last_time = self.history[-1][2]
+            if  last_y < half_frame_height:
+                if y > half_frame_height:
+                    self.center_time = (time + last_time) / 2 
+            else:
+                if y < half_frame_height:
+                    self.center_time = (time + last_time) / 2
+                    
         position = (x, y, time)
         if len(self.history) > MAX_HISTORY:
             self.history.popleft()
         self.history.append(position)
         self.frames_missing = 0
         self.frames_since_start += 1
+        self.old_time = time
 
     def get_position(self):
         Point = namedtuple('Point', 'x y')

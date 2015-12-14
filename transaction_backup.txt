@@ -1,0 +1,3 @@
+{"tagId":-1,"direction":"out","time":1450108267.41,"certainity":"True","alarm":"True"}
+{"tagId":-1,"direction":"out","time":1450108556.27,"certainity":"True","alarm":"True"}
+{"tagId":-1,"direction":"out","time":1450108942.49,"certainity":"True","alarm":"True"}
