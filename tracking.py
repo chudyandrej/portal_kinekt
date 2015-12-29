@@ -1,31 +1,73 @@
 import numpy as np
 import cv2
+import freenect
 import time
 import thread
 import math
+from comunication import websockets
+from comunication import get_json_settings, get_list_tag
 from tracked_object import TrackedObject
 from collections import namedtuple
-from bg_subtractor import filter_frame
 from comunication import send_transaction, get_tag_permission
 from antena_read import AntennaReader
+ 
 
-###############SETTINGS##############################
-URL = '/Users/andrejchudy/Desktop/video.avi'
-GUI = False
+###############DEFINED GLOBAL VAR##############################
+GUI = False           #permissions to use GUI
 PERM_RECORD = False   #permissions to record
-MIN_CONTOUR_AREA = 4400
-HEIGHT_TOLERANCE = 10
-MAX_DISTANCE_TO_PARSE =  200
-MIN_DISTANCE_TO_PARSE =  200
-MAX_DISTANCE_TO_MERGE = 10 
+SEND_TRANS = True
+VIDEO_INPUT = False
+RECORD = False      #motion tracking for record
+HEIGHT_TOLERANCE = 10   #tolerance from highest point
 FRAME_WIDTH = 640
 FRAME_HEIGHT = 480
-RECORD = False
 dir_reversed = False    #revers monitoring
-######################################################
-
 pass_in = 0
 pass_out = 0
+
+##############CONFIGURATE SETTINGS###################
+MIN_HEIGHT = 35 
+URL = '/Users/andrejchudy/Desktop/output.avi'
+MIN_CONTOUR_AREA = 4400
+MAX_CONTOUR_AREA = FRAME_HEIGHT * FRAME_WIDTH / 3 
+MAX_DISTANCE_TO_PARSE =  200
+MIN_DISTANCE_TO_PARSE =  200
+MAX_DISTANCE_TO_MERGE = 10  #maximal distance to marge over floodplains algorithm  
+#####################################################
+
+def getDepthMap():    
+    depth, timestamp = freenect.sync_get_depth()
+ 
+    np.clip(depth, 0, 2**10 - 1, depth)
+    depth >>= 2
+    depth = depth.astype(np.uint8)
+ 
+    return depth
+
+def load_settings():
+    #load settings from server
+    settings = get_json_settings()
+    
+    global MIN_HEIGHT
+    MIN_HEIGHT = settings['kin_fg_minHeight']
+    min_area = settings['kin_minArea']
+    max_dist_to_pars = settings['kin_maxDist_p']
+    min_dis_to_create = settings['kin_minDist_c']
+    hTolerance = settings['kin_fg_hTolerance']
+    maxDist_marge = settings['kin_fg_maxDist_marge']
+    return min_area, max_dist_to_pars, min_dis_to_create, hTolerance, maxDist_marge
+
+def filter_frame(frame, bg_reference):
+    # Function for first filtring by height
+    # Converts frame to BGR color space.
+    img_grayscale = cv2.cvtColor(frame,cv2.COLOR_BGR2GRAY)
+    # Calculates the per-element absolute difference between two arrays or between an array and a scalar.
+    fg = cv2.absdiff(img_grayscale, bg_reference)
+    #Threshold the foreground
+    ret, thresh = cv2.threshold(fg, MIN_HEIGHT, 255, cv2.THRESH_BINARY)
+    #
+    return thresh
+
 
 def merge_contours(contours):
     contours = filter(lambda cnt : cv2.contourArea(cnt) > 0, contours)
@@ -114,7 +156,9 @@ def find_contours(frame, filtered_fg):
 def is_valid_contour(contour):
     # Function decides if the contour is good enough to be tracked
     contour_area = cv2.contourArea(contour)
-    return contour_area > MIN_CONTOUR_AREA
+    return contour_area > MIN_CONTOUR_AREA and contour_area < MAX_CONTOUR_AREA
+    
+      
 
 def compute_distance(point1, point2):
     a = (point1[0] - point2[0]) 
@@ -204,9 +248,7 @@ def counter_person_flow(tracked_objects,antenna_reader ,t):
                 tracked_object.changed_starting_pos = True
                 tag, certainity = antenna_reader.get_object_tag_id(tracked_object.center_time)
                 alarm = get_tag_permission(tag)
-                if dir_reversed:
-                    thread.start_new_thread(send_transaction,(tag,'in',tracked_object.center_time, certainity, alarm))
-                else:
+                if SEND_TRANS:
                     thread.start_new_thread(send_transaction,(tag,'out',tracked_object.center_time,certainity, alarm))
             
         if (tracked_object.start_y > FRAME_HEIGHT / 2 and
@@ -219,9 +261,7 @@ def counter_person_flow(tracked_objects,antenna_reader ,t):
                 tracked_object.changed_starting_pos = True
                 tag, certainity = antenna_reader.get_object_tag_id(tracked_object.center_time)
                 alarm = get_tag_permission(tag)
-                if dir_reversed:
-                    thread.start_new_thread(send_transaction,(tag,'out',tracked_object.center_time,certainity, alarm))
-                else: 
+                if SEND_TRANS:
                     thread.start_new_thread(send_transaction,(tag,'in',tracked_object.center_time,certainity, alarm))
 
 def parse_arguments(arguments):
@@ -231,14 +271,45 @@ def parse_arguments(arguments):
     if "-r" in arguments:
         global PERM_RECORD
         PERM_RECORD = True
+    if "-s" in arguments:
+        global SEND_TRANS
+        SEND_TRANS = False
+    if "-v" in arguments:
+        global VIDEO_INPUT
+        VIDEO_INPUT = True
+    if "-help" or in arguments:
+        print "1. -g => start whit GUI"
+        print "2. -r => enable recording"
+        print "3. -s => disable comunication"
+        print "4. -g => video input over video file"
+        exit()
+    
+
+
+
 
 def tracking_start(arguments):
+#main function of program. This function calling all. 
+
+    frame_delay = 1
     parse_arguments(arguments)
+    #load enabled tags
+    if SEND_TRANS:
+        get_list_tag()
+    #start websocket thread
+    if SEND_TRANS:
+        thread.start_new_thread(websockets,())  
     # Initialise videl capture
-    cap = cv2.VideoCapture(URL)
+    if VIDEO_INPUT:
+        cap = cv2.VideoCapture(URL)
+
     # Take first frame as bacground reference
-    _, initial_frame = cap.read()
-    bg_reference = cv2.cvtColor(initial_frame,cv2.COLOR_BGR2GRAY)
+    if VIDEO_INPUT:
+        _, initial_frame = cap.read()
+        bg_reference = cv2.cvtColor(initial_frame,cv2.COLOR_BGR2GRAY)
+    else:
+        bg_reference = getDepthMap()
+    
 
     # Iterate forever
     tracked_objects = []
@@ -247,15 +318,20 @@ def tracking_start(arguments):
         record_cap = cv2.VideoWriter('output.avi',fourcc, 20.0, (FRAME_WIDTH,FRAME_HEIGHT))
     antena_reader = AntennaReader()
 
-    while(cap.isOpened()):
-        t = time.time() 
+    while(True):
+        t = time.time()
+        #Set motion tracking for recording 
         global RECORD
         RECORD = False
         #Read frame
-        ret, frame = cap.read()
-        if not ret:
-            print "Read failed"
-            break
+        if VIDEO_INPUT:
+            ret, frame = cap.read()
+            if not ret:
+                print "Read failed"
+                break
+        else:
+            frame_ld = getDepthMap()
+            frame = cv2.cvtColor(frame_ld, cv2.COLOR_GRAY2BGR)
         # Obtain thresholded and filtered version
         filtered_fg = filter_frame(frame, bg_reference)
         # Find centroids of all contours
@@ -295,15 +371,15 @@ def tracking_start(arguments):
             cv2.imshow('frame',frame)
             cv2.imshow('filtered_fgmask',filtered_fg)
 
-            key = cv2.waitKey(1)
+            key = cv2.waitKey(frame_delay)
             if key & 0xFF == ord('q'):
                 break
             if key & 0xFF == ord('s'):
                 frame_delay = 500
-            if key & 0xFF == ord('f'):
+            if key & 0xFF == ord('n'):
                 frame_delay = 1
-
     # Teardown
-    cap.release()
+    if VIDEO_INPUT:
+        cap.release()
     if GUI:
         cv2.destroyAllWindows()
