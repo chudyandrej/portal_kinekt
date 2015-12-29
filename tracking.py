@@ -59,10 +59,8 @@ def load_settings():
 
 def filter_frame(frame, bg_reference):
     # Function for first filtring by height
-    # Converts frame to BGR color space.
-    img_grayscale = cv2.cvtColor(frame,cv2.COLOR_BGR2GRAY)
     # Calculates the per-element absolute difference between two arrays or between an array and a scalar.
-    fg = cv2.absdiff(img_grayscale, bg_reference)
+    fg = cv2.absdiff(frame, bg_reference)
     #Threshold the foreground
     ret, thresh = cv2.threshold(fg, MIN_HEIGHT, 255, cv2.THRESH_BINARY)
     #
@@ -106,17 +104,15 @@ def merge_contour_rec(root_cnt, other_cnts, new_blob):
 def is_near(cnt1, cnt2):
     return compute_distance(cnt1[0], cnt2[0]) < MAX_DISTANCE_TO_MERGE
 
-def find_contours(frame, filtered_fg):
+def find_contours(gray, filtered_fg):
     # Function find centroids of all valid contours in the frame
     # Know issues :
     #   1.  nearby contours are not merged - considering nearness clustering
 
-    gray = cv2.cvtColor(frame,cv2.COLOR_BGR2GRAY)
     #Find contour in a given frame
     _, contours, _ = cv2.findContours(filtered_fg.copy(), cv2.RETR_EXTERNAL,
                 cv2.CHAIN_APPROX_SIMPLE)
     m_conture = merge_contours(contours)
-    cv2.drawContours(frame,m_conture,-1,255,-1)
     # Filter the conturs to track only the valid ones
     valid_contours = filter(is_valid_contour, m_conture)
     centroids = []
@@ -330,7 +326,7 @@ def tracking_start(arguments):
                 print "Read failed"
                 break
         else:
-            frame_ld = getDepthMap()
+            frame = getDepthMap()
         # Obtain thresholded and filtered version
         filtered_fg = filter_frame(frame, bg_reference)
         # Find centroids of all contours
@@ -345,6 +341,7 @@ def tracking_start(arguments):
         update_missing(unused_objects, tracked_objects)
         # Control position all objects
         counter_person_flow(tracked_objects, antena_reader, t)
+	frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
         if GUI or PERM_RECORD: 
             cv2.namedWindow('frame', 0)             #init windows
             cv2.namedWindow('filtered_fgmask', 0) 
