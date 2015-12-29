@@ -277,11 +277,11 @@ def parse_arguments(arguments):
     if "-v" in arguments:
         global VIDEO_INPUT
         VIDEO_INPUT = True
-    if "-help" or in arguments:
+    if "-help" in arguments:
         print "1. -g => start whit GUI"
         print "2. -r => enable recording"
         print "3. -s => disable comunication"
-        print "4. -g => video input over video file"
+        print "4. -v => video input over video file"
         exit()
     
 
