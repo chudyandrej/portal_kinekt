@@ -331,7 +331,6 @@ def tracking_start(arguments):
                 break
         else:
             frame_ld = getDepthMap()
-            frame = cv2.cvtColor(frame_ld, cv2.COLOR_GRAY2BGR)
         # Obtain thresholded and filtered version
         filtered_fg = filter_frame(frame, bg_reference)
         # Find centroids of all contours
@@ -356,7 +355,6 @@ def tracking_start(arguments):
             for pair in pairs:
                 obj, cnt = pair
                 x, y, w, h = cv2.boundingRect(cnt.cnt)
-             
                 frame = cv2.rectangle(frame, (x,y), (x+w,y+h), obj.color,5)
                 frame = cv2.circle(frame, obj.get_prediction(t), 10, obj.color, -1)
                 frame = cv2.circle(frame, obj.get_prediction(t), MAX_DISTANCE_TO_PARSE, obj.color, 0)          
