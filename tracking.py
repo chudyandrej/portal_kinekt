@@ -35,14 +35,6 @@ MIN_DISTANCE_TO_PARSE =  200
 MAX_DISTANCE_TO_MERGE = 10  #maximal distance to marge over floodplains algorithm  
 #####################################################
 
-def getDepthMap():    
-    depth, timestamp = freenect.sync_get_depth()
- 
-    np.clip(depth, 0, 2**10 - 1, depth)
-    depth >>= 2
-    depth = depth.astype(np.uint8)
- 
-    return depth
 
 def load_settings():
     #load settings from server
@@ -283,9 +275,19 @@ def parse_arguments(arguments):
 
 
 
+def covert_depth_to_np_array(depth):    
+ 
+    np.clip(depth, 0, 2**10 - 1, depth)
+    depth >>= 2
+    depth = depth.astype(np.uint8)
+ 
+    return depth
+
 
 def tracking_start(arguments):
 #main function of program. This function calling all. 
+
+
 
     frame_delay = 1
     parse_arguments(arguments)
@@ -304,7 +306,12 @@ def tracking_start(arguments):
         _, initial_frame = cap.read()
         bg_reference = cv2.cvtColor(initial_frame,cv2.COLOR_BGR2GRAY)
     else:
-        bg_reference = getDepthMap()
+        q = Queue(10)
+        def on_frame_cb(dev, depth, timestamp):
+            frame = covert_depth_to_np_array(depth)
+            q.put_nowait()
+        freenect.runloop(depth=on_frame_cb, video=None, body=None)
+
     
 
     # Iterate forever
@@ -322,11 +329,13 @@ def tracking_start(arguments):
         #Read frame
         if VIDEO_INPUT:
             ret, frame = cap.read()
+            frame = cv2.cvtColor(initial_frame,cv2.COLOR_BGR2GRAY)
+
             if not ret:
                 print "Read failed"
                 break
         else:
-            frame = getDepthMap()
+            frame = q.get()
         # Obtain thresholded and filtered version
         filtered_fg = filter_frame(frame, bg_reference)
         # Find centroids of all contours
