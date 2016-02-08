@@ -16,7 +16,6 @@ from antena_read import AntennaReader
 GUI = False           #permissions to use GUI
 PERM_RECORD = False   #permissions to record
 SEND_TRANS = True
-VIDEO_INPUT = False
 RECORD = False      #motion tracking for record
 HEIGHT_TOLERANCE = 10   #tolerance from highest point
 FRAME_WIDTH = 640
@@ -35,6 +34,14 @@ MIN_DISTANCE_TO_PARSE =  200
 MAX_DISTANCE_TO_MERGE = 10  #maximal distance to marge over floodplains algorithm  
 #####################################################
 
+def getDepthMap():    
+    depth, timestamp = freenect.sync_get_depth()
+ 
+    np.clip(depth, 0, 2**10 - 1, depth)
+    depth >>= 2
+    depth = depth.astype(np.uint8)
+ 
+    return depth
 
 def load_settings():
     #load settings from server
@@ -51,8 +58,10 @@ def load_settings():
 
 def filter_frame(frame, bg_reference):
     # Function for first filtring by height
+    # Converts frame to BGR color space.
+    img_grayscale = cv2.cvtColor(frame,cv2.COLOR_BGR2GRAY)
     # Calculates the per-element absolute difference between two arrays or between an array and a scalar.
-    fg = cv2.absdiff(frame, bg_reference)
+    fg = cv2.absdiff(img_grayscale, bg_reference)
     #Threshold the foreground
     ret, thresh = cv2.threshold(fg, MIN_HEIGHT, 255, cv2.THRESH_BINARY)
     #
@@ -96,15 +105,17 @@ def merge_contour_rec(root_cnt, other_cnts, new_blob):
 def is_near(cnt1, cnt2):
     return compute_distance(cnt1[0], cnt2[0]) < MAX_DISTANCE_TO_MERGE
 
-def find_contours(gray, filtered_fg):
+def find_contours(frame, filtered_fg):
     # Function find centroids of all valid contours in the frame
     # Know issues :
     #   1.  nearby contours are not merged - considering nearness clustering
 
+    gray = cv2.cvtColor(frame,cv2.COLOR_BGR2GRAY)
     #Find contour in a given frame
     _, contours, _ = cv2.findContours(filtered_fg.copy(), cv2.RETR_EXTERNAL,
                 cv2.CHAIN_APPROX_SIMPLE)
     m_conture = merge_contours(contours)
+    cv2.drawContours(frame,m_conture,-1,255,-1)
     # Filter the conturs to track only the valid ones
     valid_contours = filter(is_valid_contour, m_conture)
     centroids = []
@@ -262,32 +273,18 @@ def parse_arguments(arguments):
     if "-s" in arguments:
         global SEND_TRANS
         SEND_TRANS = False
-    if "-v" in arguments:
-        global VIDEO_INPUT
-        VIDEO_INPUT = True
     if "-help" in arguments:
         print "1. -g => start whit GUI"
         print "2. -r => enable recording"
         print "3. -s => disable comunication"
-        print "4. -v => video input over video file"
         exit()
     
 
 
 
-def covert_depth_to_np_array(depth):    
- 
-    np.clip(depth, 0, 2**10 - 1, depth)
-    depth >>= 2
-    depth = depth.astype(np.uint8)
- 
-    return depth
-
 
 def tracking_start(arguments):
 #main function of program. This function calling all. 
-
-
 
     frame_delay = 1
     parse_arguments(arguments)
@@ -298,22 +295,12 @@ def tracking_start(arguments):
     if SEND_TRANS:
         thread.start_new_thread(websockets,())  
     # Initialise videl capture
-    if VIDEO_INPUT:
-        cap = cv2.VideoCapture(URL)
+    cap = cv2.VideoCapture(URL)
 
     # Take first frame as bacground reference
-    if VIDEO_INPUT:
-        _, initial_frame = cap.read()
-        bg_reference = cv2.cvtColor(initial_frame,cv2.COLOR_BGR2GRAY)
-    else:
-        q = Queue(10)
-        def on_frame_cb(dev, depth, timestamp):
-            frame = covert_depth_to_np_array(depth)
-            q.put_nowait()
-        freenect.runloop(depth=on_frame_cb, video=None, body=None)
-
-    
-
+    _, initial_frame = cap.read()
+    bg_reference = cv2.cvtColor(initial_frame,cv2.COLOR_BGR2GRAY)
+   
     # Iterate forever
     tracked_objects = []
     if PERM_RECORD:
@@ -327,15 +314,11 @@ def tracking_start(arguments):
         global RECORD
         RECORD = False
         #Read frame
-        if VIDEO_INPUT:
-            ret, frame = cap.read()
-            frame = cv2.cvtColor(initial_frame,cv2.COLOR_BGR2GRAY)
-
-            if not ret:
-                print "Read failed"
-                break
-        else:
-            frame = q.get()
+        ret, frame = cap.read()
+        if not ret:
+            print "Read failed"
+            break
+   
         # Obtain thresholded and filtered version
         filtered_fg = filter_frame(frame, bg_reference)
         # Find centroids of all contours
@@ -350,7 +333,6 @@ def tracking_start(arguments):
         update_missing(unused_objects, tracked_objects)
         # Control position all objects
         counter_person_flow(tracked_objects, antena_reader, t)
-	frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
         if GUI or PERM_RECORD: 
             cv2.namedWindow('frame', 0)             #init windows
             cv2.namedWindow('filtered_fgmask', 0) 
@@ -383,7 +365,6 @@ def tracking_start(arguments):
             if key & 0xFF == ord('n'):
                 frame_delay = 1
     # Teardown
-    if VIDEO_INPUT:
-        cap.release()
+    cap.release()
     if GUI:
         cv2.destroyAllWindows()
