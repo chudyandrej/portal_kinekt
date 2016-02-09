@@ -1,9 +1,9 @@
 import numpy as np
 import cv2
-import freenect
 import time
 import thread
 import math
+from Queue import Queue
 from comunication import websockets
 from comunication import get_json_settings, get_list_tag
 from tracked_object import TrackedObject
@@ -11,21 +11,21 @@ from collections import namedtuple
 from comunication import send_transaction, get_tag_permission
 from antena_read import AntennaReader
  
+frames = Queue(5)      #init queue of frams and bg masks
 
 ###############DEFINED GLOBAL VAR##############################
 GUI = False           #permissions to use GUI
 PERM_RECORD = False   #permissions to record
 SEND_TRANS = True
 RECORD = False      #motion tracking for record
-HEIGHT_TOLERANCE = 10   #tolerance from highest point
 FRAME_WIDTH = 640
 FRAME_HEIGHT = 480
-dir_reversed = False    #revers monitoring
 pass_in = 0
 pass_out = 0
 
 ##############CONFIGURATE SETTINGS###################
 MIN_HEIGHT = 35 
+HEIGHT_TOLERANCE = 10   #tolerance from highest point
 URL = '/Users/andrejchudy/Desktop/output.avi'
 MIN_CONTOUR_AREA = 4400
 MAX_CONTOUR_AREA = FRAME_HEIGHT * FRAME_WIDTH / 3 
@@ -36,17 +36,14 @@ MAX_DISTANCE_TO_MERGE = 10  #maximal distance to marge over floodplains algorith
 
 def getDepthMap():    
     depth, timestamp = freenect.sync_get_depth()
- 
     np.clip(depth, 0, 2**10 - 1, depth)
     depth >>= 2
     depth = depth.astype(np.uint8)
- 
     return depth
 
 def load_settings():
     #load settings from server
     settings = get_json_settings()
-    
     global MIN_HEIGHT
     MIN_HEIGHT = settings['kin_fg_minHeight']
     min_area = settings['kin_minArea']
@@ -56,17 +53,13 @@ def load_settings():
     maxDist_marge = settings['kin_fg_maxDist_marge']
     return min_area, max_dist_to_pars, min_dis_to_create, hTolerance, maxDist_marge
 
-def filter_frame(frame, bg_reference):
+def filter_frame(gray_frame, bg_reference):
     # Function for first filtring by height
-    # Converts frame to BGR color space.
-    img_grayscale = cv2.cvtColor(frame,cv2.COLOR_BGR2GRAY)
     # Calculates the per-element absolute difference between two arrays or between an array and a scalar.
-    fg = cv2.absdiff(img_grayscale, bg_reference)
+    fg = cv2.absdiff(gray_frame, bg_reference)
     #Threshold the foreground
     ret, thresh = cv2.threshold(fg, MIN_HEIGHT, 255, cv2.THRESH_BINARY)
-    #
     return thresh
-
 
 def merge_contours(contours):
     contours = filter(lambda cnt : cv2.contourArea(cnt) > 0, contours)
@@ -105,12 +98,12 @@ def merge_contour_rec(root_cnt, other_cnts, new_blob):
 def is_near(cnt1, cnt2):
     return compute_distance(cnt1[0], cnt2[0]) < MAX_DISTANCE_TO_MERGE
 
-def find_contours(frame, filtered_fg):
+def find_contours(frame, gray_frame ,filtered_fg):
     # Function find centroids of all valid contours in the frame
     # Know issues :
     #   1.  nearby contours are not merged - considering nearness clustering
 
-    gray = cv2.cvtColor(frame,cv2.COLOR_BGR2GRAY)
+    
     #Find contour in a given frame
     _, contours, _ = cv2.findContours(filtered_fg.copy(), cv2.RETR_EXTERNAL,
                 cv2.CHAIN_APPROX_SIMPLE)
@@ -126,9 +119,9 @@ def find_contours(frame, filtered_fg):
         # Draw a contour on the mask
         cv2.drawContours(mask,[cnt],0,255,-1)
         #Find the minimal value of the contour (highest point)
-        minVal, _, _, _ =  cv2.minMaxLoc(gray, mask=mask)
+        minVal, _, _, _ =  cv2.minMaxLoc(gray_frame, mask=mask)
         # Threshold whole image with the range (minVal, minVal + tolerance)
-        _, thresh = cv2.threshold(gray, minVal+HEIGHT_TOLERANCE,
+        _, thresh = cv2.threshold(gray_frame, minVal+HEIGHT_TOLERANCE,
                 255, cv2.THRESH_BINARY_INV)
         # And the threshold with mask to eliminate all results not in the
         # same contour
@@ -281,12 +274,21 @@ def parse_arguments(arguments):
     
 
 
+def worker(cap,_):
+    #workers to make bg substractr 
+    while True:
+        get_time = time.time()
+        ret , frame = cap.read()  
+        if not ret:
+            get_time = 0
+            break;                          
+        frames.put((frame, get_time), block=True)         #result push to queue
+
 
 
 def tracking_start(arguments):
 #main function of program. This function calling all. 
-
-    frame_delay = 1
+    frame_delay = 1;
     parse_arguments(arguments)
     #load enabled tags
     if SEND_TRANS:
@@ -308,21 +310,20 @@ def tracking_start(arguments):
         record_cap = cv2.VideoWriter('output.avi',fourcc, 20.0, (FRAME_WIDTH,FRAME_HEIGHT))
     antena_reader = AntennaReader()
 
+    thread.start_new_thread(worker, (cap,_))
+
     while(True):
-        t = time.time()
         #Set motion tracking for recording 
         global RECORD
         RECORD = False
         #Read frame
-        ret, frame = cap.read()
-        if not ret:
-            print "Read failed"
-            break
-   
+        print "q.size " + str(frames.qsize())
+        frame , t = frames.get(block=True)
+        gray_frame = cv2.cvtColor(frame,cv2.COLOR_BGR2GRAY)
         # Obtain thresholded and filtered version
-        filtered_fg = filter_frame(frame, bg_reference)
+        filtered_fg = filter_frame(gray_frame, bg_reference)
         # Find centroids of all contours
-        centroids = find_contours(frame, filtered_fg)
+        centroids = find_contours(frame, gray_frame, filtered_fg)
         pairs, unused_centroids, unused_objects = assign_centroids(
                 tracked_objects, centroids, t)
         # Create objects for centroid that were not assigned
@@ -332,7 +333,7 @@ def tracking_start(arguments):
         # Delete missing objects and call callbacks
         update_missing(unused_objects, tracked_objects)
         # Control position all objects
-        counter_person_flow(tracked_objects, antena_reader, t)
+        #counter_person_flow(tracked_objects, antena_reader, t)
         if GUI or PERM_RECORD: 
             cv2.namedWindow('frame', 0)             #init windows
             cv2.namedWindow('filtered_fgmask', 0) 
@@ -357,13 +358,8 @@ def tracking_start(arguments):
             cv2.imshow('frame',frame)
             cv2.imshow('filtered_fgmask',filtered_fg)
 
-            key = cv2.waitKey(frame_delay)
-            if key & 0xFF == ord('q'):
+            if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
-            if key & 0xFF == ord('s'):
-                frame_delay = 500
-            if key & 0xFF == ord('n'):
-                frame_delay = 1
     # Teardown
     cap.release()
     if GUI:
