@@ -3,20 +3,17 @@ import cv2
 import time
 import thread
 import math
+import freenect
+
 from Queue import Queue
-from comunication import websockets
-from comunication import get_json_settings, get_list_tag
 from tracked_object import TrackedObject
 from collections import namedtuple
-from comunication import send_transaction, get_tag_permission
-from antena_read import AntennaReader
- 
-frames = Queue(5)      #init queue of frams and bg masks
+
+
 
 ###############DEFINED GLOBAL VAR##############################
 GUI = False           #permissions to use GUI
 PERM_RECORD = False   #permissions to record
-SEND_TRANS = True
 RECORD = False      #motion tracking for record
 FRAME_WIDTH = 640
 FRAME_HEIGHT = 480
@@ -41,17 +38,6 @@ def getDepthMap():
     depth = depth.astype(np.uint8)
     return depth
 
-def load_settings():
-    #load settings from server
-    settings = get_json_settings()
-    global MIN_HEIGHT
-    MIN_HEIGHT = settings['kin_fg_minHeight']
-    min_area = settings['kin_minArea']
-    max_dist_to_pars = settings['kin_maxDist_p']
-    min_dis_to_create = settings['kin_minDist_c']
-    hTolerance = settings['kin_fg_hTolerance']
-    maxDist_marge = settings['kin_fg_maxDist_marge']
-    return min_area, max_dist_to_pars, min_dis_to_create, hTolerance, maxDist_marge
 
 def filter_frame(gray_frame, bg_reference):
     # Function for first filtring by height
@@ -224,7 +210,7 @@ def update_missing(unused_objects, tracked_objects):
         if unused_object.missing() == -1:
             tracked_objects.remove(unused_object)
 
-def counter_person_flow(tracked_objects,antenna_reader ,t):
+def counter_person_flow(tracked_objects ,t):
     global pass_in
     global pass_out
     for tracked_object in tracked_objects:
@@ -238,10 +224,9 @@ def counter_person_flow(tracked_objects,antenna_reader ,t):
             if i != 0 or o != 0:   #object-counting 
                 tracked_object.start_y = FRAME_HEIGHT
                 tracked_object.changed_starting_pos = True
-                tag, certainity = antenna_reader.get_object_tag_id(tracked_object.center_time)
-                alarm = get_tag_permission(tag)
-                if SEND_TRANS:
-                    thread.start_new_thread(send_transaction,(tag,'out',tracked_object.center_time,certainity, alarm))
+               
+               
+                #send trans
             
         if (tracked_object.start_y > FRAME_HEIGHT / 2 and
                 tracked_object.get_prediction(t).y < FRAME_HEIGHT / 4 ):    #down line
@@ -251,11 +236,9 @@ def counter_person_flow(tracked_objects,antenna_reader ,t):
             if i != 0 or o != 0:   #object-counting
                 tracked_object.start_y = 0
                 tracked_object.changed_starting_pos = True
-                tag, certainity = antenna_reader.get_object_tag_id(tracked_object.center_time)
-                alarm = get_tag_permission(tag)
-                if SEND_TRANS:
-                    thread.start_new_thread(send_transaction,(tag,'in',tracked_object.center_time,certainity, alarm))
-
+              
+               
+                #send trans
 def parse_arguments(arguments):
     if "-g" in arguments:
         global GUI
@@ -263,26 +246,12 @@ def parse_arguments(arguments):
     if "-r" in arguments:
         global PERM_RECORD
         PERM_RECORD = True
-    if "-s" in arguments:
-        global SEND_TRANS
-        SEND_TRANS = False
     if "-help" in arguments:
         print "1. -g => start whit GUI"
         print "2. -r => enable recording"
-        print "3. -s => disable comunication"
         exit()
     
 
-
-def worker(cap,_):
-    #workers to make bg substractr 
-    while True:
-        get_time = time.time()
-        ret , frame = cap.read()  
-        if not ret:
-            get_time = 0
-            break;                          
-        frames.put((frame, get_time), block=True)         #result push to queue
 
 
 
@@ -290,35 +259,34 @@ def tracking_start(arguments):
 #main function of program. This function calling all. 
     frame_delay = 1;
     parse_arguments(arguments)
-    #load enabled tags
-    if SEND_TRANS:
-        get_list_tag()
-    #start websocket thread
-    if SEND_TRANS:
-        thread.start_new_thread(websockets,())  
+
     # Initialise videl capture
     cap = cv2.VideoCapture(URL)
 
     # Take first frame as bacground reference
-    _, initial_frame = cap.read()
-    bg_reference = cv2.cvtColor(initial_frame,cv2.COLOR_BGR2GRAY)
+
+
+    depth = getDepthMap()
+    bg_reference = cv2.cvtColor(depth,cv2.COLOR_GRAY2BGR)
+    bg_reference = cv2.cvtColor(bg_reference,cv2.COLOR_BGR2GRAY)
    
     # Iterate forever
     tracked_objects = []
     if PERM_RECORD:
         fourcc = cv2.VideoWriter_fourcc(*'XVID')
         record_cap = cv2.VideoWriter('output.avi',fourcc, 20.0, (FRAME_WIDTH,FRAME_HEIGHT))
-    antena_reader = AntennaReader()
+    
 
-    thread.start_new_thread(worker, (cap,_))
-
+   
     while(True):
         #Set motion tracking for recording 
         global RECORD
         RECORD = False
         #Read frame
-        print "q.size " + str(frames.qsize())
-        frame , t = frames.get(block=True)
+        t = time.time()
+        depth = getDepthMap()
+        frame = cv2.cvtColor(depth,cv2.COLOR_GRAY2BGR)
+
         gray_frame = cv2.cvtColor(frame,cv2.COLOR_BGR2GRAY)
         # Obtain thresholded and filtered version
         filtered_fg = filter_frame(gray_frame, bg_reference)
@@ -333,7 +301,7 @@ def tracking_start(arguments):
         # Delete missing objects and call callbacks
         update_missing(unused_objects, tracked_objects)
         # Control position all objects
-        #counter_person_flow(tracked_objects, antena_reader, t)
+        
         if GUI or PERM_RECORD: 
             cv2.namedWindow('frame', 0)             #init windows
             cv2.namedWindow('filtered_fgmask', 0) 
