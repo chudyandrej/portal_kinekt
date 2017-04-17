@@ -1,3 +1,5 @@
 .DS_Store
 *.avi
 *.pyc
+
+/.idea

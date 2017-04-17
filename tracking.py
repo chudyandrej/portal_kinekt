@@ -169,6 +169,9 @@ def assign_centroids(tracked_objects, contours, t):
     potential_relicts = []  # create list of potential_relicts contours
 
     for obj in tracked_objects:
+        if contours:
+            obj.particles_filter(list(map(lambda cnt: cnt.point, contours)))
+
         for cnt in contours:
             distance = compute_distance(obj.get_prediction(t), cnt.point)
             if distance < MAX_DISTANCE_TO_PARSE:
@@ -339,6 +342,10 @@ def tracking_start(arguments):
             # Show counters
             for obj in tracked_objects:
                 frame = cv2.circle(frame, obj.get_prediction(t), 5, obj.color, -1)
+                obj.particles_update()
+
+                for p in obj.particles:
+                    frame = cv2.circle(frame, (int(p[0]), int(p[1])), 2, obj.color, -1)
 
             for pair in pairs:
                 obj, cnt = pair

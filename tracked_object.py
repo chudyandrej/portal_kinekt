@@ -2,6 +2,7 @@ from __future__ import division
 from collections import deque
 import random
 from collections import namedtuple
+import math
 
 MAX_HISTORY = 15
 frame_width = 640
@@ -19,11 +20,28 @@ class TrackedObject:
         self.changed_starting_pos = False
         self.id = int(255 * random.random())
         self.center_time = 0
+        self.start_time = time
 
         self.color = (255 * random.random(), 255 * random.random(),
                       255 * random.random())
 
+        self.particles = []
+
     def update(self, x, y, time):
+        if len(self.history) >3:
+            start_x = self.history[-2][0]
+            start_y = self.history[-2][1]
+            start_t = self.history[-2][2]
+            last_x = self.history[-1][0]
+            last_y = self.history[-1][1]
+            last_t = self.history[-1][2]
+
+            time_since_start = last_t - start_t
+
+            v_x = (last_x - start_x) / time_since_start
+            v_y = ((last_y - start_y) / time_since_start)
+            self.init_particles(x,y, v_x, v_y)
+
 
         half_frame_height = frame_height / 2
         if (len(self.history) != 0):
@@ -43,6 +61,51 @@ class TrackedObject:
         self.frames_missing = 0
         self.frames_since_start += 1
         self.old_time = time
+
+    def particles_update(self):
+        if not self.particles:
+            return
+        new_particles = []
+        for p in self.particles:
+            new_x = p[0] + random.gauss(p[2], frame_width / 15)
+            new_y = p[1] + random.gauss(p[3], frame_height / 50)
+            # Try to use history based velocity estimation
+            new_vx = random.gauss(p[2], p[2] / 20)
+            new_vy = random.gauss(p[3], p[3] / 20)
+            new_particles.append((new_x, new_y, new_vx, new_vy))
+        self.particles = new_particles
+
+
+    def _particle_likelihoods(self, measurements):
+        particle_likelihoods = []
+        for p in self.particles:
+            closest_distance = min(list(map(lambda m: math.sqrt((m[0] - p[0]) ** 2 + (m[1] - p[1]) ** 2), measurements)))
+            standard_deviation = 50
+            likelihood = math.exp(-closest_distance ** 2 / (2 * standard_deviation ** 2  ))
+            # TODO : add k
+            particle_likelihoods.append(likelihood)
+        return particle_likelihoods
+
+    def particles_filter(self, measurements):
+        new_generation = []
+        new_generation_size = len(self.particles)
+        likelihoods = self._particle_likelihoods(measurements)
+        sum_likelihoods = sum(likelihoods)
+
+        while len(new_generation) < new_generation_size:
+            sum_so_far = likelihoods[0]
+            i = 0
+            random_num = random.random() * sum_likelihoods
+            while sum_so_far < random_num:
+                i += 1
+                sum_so_far += likelihoods[i]
+            new_generation.append(self.particles[i])
+
+    def init_particles(self, x, y, vx, vy):
+        self.particles = [(x, y, vx, vy) for _ in range(100)]
+
+
+
 
     def get_position(self):
         Point = namedtuple('Point', 'x y')
