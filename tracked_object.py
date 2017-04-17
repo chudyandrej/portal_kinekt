@@ -89,12 +89,9 @@ class TrackedObject:
         time_since_start = last_t - start_t
 
         v_x = (last_x - start_x) / time_since_start
-        v_y = ((last_y - start_y) / time_since_start) * 1.5
-
+        v_y = ((last_y - start_y) / time_since_start)
         delta_t = current_t - last_t
-
         current_x = last_x + v_x * delta_t
-
         current_y = last_y + v_y * delta_t
 
         return Point(int(current_x), int(current_y))

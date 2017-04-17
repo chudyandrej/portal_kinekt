@@ -1,6 +1,5 @@
 import numpy as np
 import cv2
-import time
 import math
 import time
 
@@ -20,16 +19,17 @@ pass_in = 0
 pass_out = 0
 
 # CONFIGURABLE SETTINGS
-MIN_HEIGHT = 34
+MIN_HEIGHT = 30
 # tolerance from highest point
 HEIGHT_TOLERANCE = 20
-URL = '/Users/andrej/Desktop/1_meranie/aaa.mp4'
+URL = './videos/easy.avi'
 MIN_CONTOUR_AREA = 4400
+MICRO_CONTURE = 200
 MAX_CONTOUR_AREA = FRAME_HEIGHT * FRAME_WIDTH / 3
 MAX_DISTANCE_TO_PARSE = 200
 MIN_DISTANCE_TO_PARSE = 200
 # maximal distance to marge over floodplains algorithm
-MAX_DISTANCE_TO_MERGE = 30
+MAX_DISTANCE_TO_MERGE = 100
 
 
 
@@ -103,7 +103,7 @@ def find_contours(frame, gray_frame, filtered_fg):
     #   1.  nearby contours are not merged - considering nearness clustering
     # Find contour in a given frame
     _, contours, _ = cv2.findContours(filtered_fg.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
+    contours = list(filter(is_not_micro_contour, contours))
     m_conture = merge_contours(contours)
     valid_contours = list(filter(is_valid_contour, m_conture))
     cv2.drawContours(frame, valid_contours, -1, 255, -1)
@@ -145,6 +145,11 @@ def find_contours(frame, gray_frame, filtered_fg):
             # Append the tuple of coordinates to the result vector
             centroids.append(Contour_tuple(center_point, cnt, [0]))
     return centroids
+
+def is_not_micro_contour(contour):
+    # Function decides if the contour is good enough to be tracked
+    contour_area = cv2.contourArea(contour)
+    return contour_area > MICRO_CONTURE
 
 
 def is_valid_contour(contour):
@@ -296,7 +301,7 @@ def tracking_start(arguments):
         fourcc = cv2.VideoWriter_fourcc(*'XVID')
         record_cap = cv2.VideoWriter('output.avi', fourcc, 20.0, (FRAME_WIDTH, FRAME_HEIGHT))
 
-    fps = cap.get(cv2.CAP_PROP_FPS)
+
     while (True):
         # Set motion tracking for recording
         global RECORD
@@ -309,17 +314,13 @@ def tracking_start(arguments):
             print("Read failed")
             break
 
-
-
-        print("FPS: ", fps)
-        timeVar = time.time()
         # depth = getDepthMap()
         #frame = cv2.cvtColor(frame, cv2.GRAY)
 
         gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        # # Obtain thresholded and filtered version
+        # Obtain thresholded and filtered version
         filtered_fg = filter_frame(gray_frame, bg_reference)
-        # # Find centroids of all contours
+        # Find centroids of all contours
         centroids = find_contours(frame, gray_frame, filtered_fg)
 
         pairs, unused_centroids, unused_objects = assign_centroids(tracked_objects, centroids, t)
@@ -343,8 +344,9 @@ def tracking_start(arguments):
                 obj, cnt = pair
                 x, y, w, h = cv2.boundingRect(cnt.cnt)
                 frame = cv2.rectangle(frame, (x, y), (x + w, y + h), obj.color, 5)
-                frame = cv2.circle(frame, obj.get_prediction(t), 10, obj.color, -1)
+                frame = cv2.circle(frame, obj.get_position(), 10, obj.color, -1)
                 frame = cv2.circle(frame, obj.get_prediction(t), MAX_DISTANCE_TO_PARSE, obj.color, 0)
+                frame = cv2.line(frame, obj.get_position(), obj.get_prediction(t + 0.5), (0, 0, 255), 3)
             font = cv2.FONT_HERSHEY_SIMPLEX
             frame = cv2.putText(frame, str(pass_in), (10, 50), font, 1, (0, 0, 255), 2)
             frame = cv2.putText(frame, str(pass_out), (10, 400), font, 1, (0, 0, 255), 2)
